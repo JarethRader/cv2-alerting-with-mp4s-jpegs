@@ -26,7 +26,6 @@ SOFTWARE.
 import multiprocessing as mp
 from multiprocessing import Queue
 import time
-import requests
 
 # gmail related
 import smtplib
@@ -46,6 +45,10 @@ import cv2
 import datetime
 import os
 import sys
+
+import boto3
+session = boto3.Session(profile_name='jareth-personal', region_name="us-west-2")
+s3 = session.client("s3")
 
 # rectangle class - includes sums, index, and flags
 class rectx:
@@ -226,7 +229,7 @@ def skip_frames(cap, frame1, gray1, fr_area, fr):
         ret2,frame2 = cap.read()
         gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
         gray2 = cv2.GaussianBlur(gray2, (21, 21), 0)
-        
+
         deltaframe=cv2.absdiff(gray1,gray2)
         threshold = cv2.threshold(deltaframe, 25, 255, cv2.THRESH_BINARY)[1]
         threshold = cv2.dilate(threshold, None)
@@ -400,7 +403,7 @@ def camera_monitor(queue):
         ret2,frame2 = cap.read()
         gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
         gray2 = cv2.GaussianBlur(gray2, (21, 21), 0)
-        
+
         deltaframe=cv2.absdiff(gray1,gray2)
         threshold = cv2.threshold(deltaframe, 25, 255, cv2.THRESH_BINARY)[1]
         threshold = cv2.dilate(threshold, None)
@@ -490,6 +493,8 @@ def camera_monitor(queue):
 
                 frame_video_filename = date_filename("motion", "jpg")
                 cv2.imwrite(frame_video_filename, frame2)
+                if s3_upload != "":
+                    upload_to_s3(frame_video_filename)
 
                 # send the file to be processed
                 if frame_post_process == True:
@@ -526,7 +531,7 @@ def camera_monitor(queue):
             frames_have_been_written = False
 
     # end while true
-    
+
     if frame_write_jpgs == False:
         video_file.release()
         cap.release()
@@ -660,55 +665,55 @@ def gmail_image(image):
 
     # instance of MIMEMultipart
     msg = MIMEMultipart()
-    
+
     # storing the senders email address
     msg['From'] = fromaddr
-    
+
     # storing the receivers email address
     msg['To'] = toaddr
-    
+
     # storing the subject
     msg['Subject'] = camera_name + ": " + image
-    
+
     # string to store the body of the mail
     # body = "Body_of_the_mail"
-    
+
     # attach the body with the msg instance
     # msg.attach(MIMEText(body, 'plain'))
-    
+
     # open the file to be sent
     filename = image
     attachment = open(filename, "rb")
-    
+
     # instance of MIMEBase and named as p
     p = MIMEBase('application', 'octet-stream')
-    
+
     # To change the payload into encoded form
     p.set_payload((attachment).read())
-    
+
     # encode into base64
     encoders.encode_base64(p)
-    
+
     p.add_header('Content-Disposition', "attachment; filename= %s" % filename)
-    
+
     # attach the instance 'p' to instance 'msg'
     msg.attach(p)
-    
+
     # creates SMTP session
     s = smtplib.SMTP('smtp.gmail.com', 587)
-    
+
     # start TLS for security
     s.starttls()
-    
+
     # Authentication
     s.login(fromaddr, gmail_login_password)
-    
+
     # Converts the Multipart msg into a string
     text = msg.as_string()
-    
+
     # sending the mail
     s.sendmail(fromaddr, toaddr, text)
-    
+
     # terminating the session
     s.quit()
 
@@ -730,7 +735,7 @@ def upload_image(filename):
     except requests.exceptions.RequestException as e:
         # A serious problem happened, like an SSLError or InvalidURL
         # print("upload problem: {}".format(e))
-        print("upload problem: check if the server is running: " + 
+        print("upload problem: check if the server is running: " +
               camera_upload_link)
         return
 
@@ -749,6 +754,23 @@ def camera_post_process(queue):
 
         if camera_upload_link != "":
             upload_image(filename)
+
+def upload_to_s3(filename):
+    print("Uploading to s3")
+    # define AWS credential profile
+
+    # generate timestamp for filename
+    timestamp = datetime.datetime.now().isoformat()
+
+    # read in file
+    # file = open(filename, "rb")
+
+    response = s3.put_object(
+        Bucket="jareth-house-cameras",
+        Key=f'test-{timestamp}',
+        Body=filename
+        )
+    print(response)
 
 #
 # globals
@@ -795,6 +817,7 @@ camera_upload_link = ""
 gmail_login_name = ""
 gmail_login_password = ""
 gmail_recipient = ""
+s3_upload = ""
 
 def parse_args():
     global frame_count_between_updates
@@ -815,6 +838,7 @@ def parse_args():
     global gmail_login_name
     global gmail_login_password
     global gmail_recipient
+    global s3_upload
 
     argc = len(sys.argv)
     prog = sys.argv[0]
@@ -846,7 +870,7 @@ def parse_args():
             frame_no_display = True
             i += 1
             continue
-    
+
         # the minimum area that is a match for motion detection
         if (arg == "-min-size-areas"):
             i += 1
@@ -864,7 +888,7 @@ def parse_args():
             frame_min_size_areas = arg_int
             i += 1
             continue
-    
+
         # the write_count for frames trailing a detected motion
         if (arg == "-write-addon-count"):
             i += 1
@@ -882,7 +906,7 @@ def parse_args():
             frame_write_addon_count = arg_int
             i += 1
             continue
-    
+
         # the idle_count for detecting idle conditions and switching files
         if (arg == "-idle-count"):
             i += 1
@@ -900,7 +924,7 @@ def parse_args():
             frame_idle_count = arg_int0
             i += 1
             continue
-    
+
         # the number of repeated rectangles to trigger a frame1 reset
         if (arg == "-reset-count"):
             i += 1
@@ -918,19 +942,19 @@ def parse_args():
             frame_reset_count = arg_int
             i += 1
             continue
-    
+
         # put all of the detected frames in one video file
         if (arg == "-one-file"):
             frame_one_file_only = True
             i += 1
             continue
-    
+
         # frame_write_jpgs = True
         if (arg == "-write-jpgs"):
             frame_write_jpgs = True
             i += 1
             continue
-    
+
         # frame_jpgs_min
         if (arg == "-jpg-min-frames"):
             i += 1
@@ -948,7 +972,7 @@ def parse_args():
             frame_jpgs_min = arg_int
             i += 1
             continue
-    
+
         # frame_jpgs_capture
         if (arg == "-jpg-capture-frames"):
             i += 1
@@ -966,7 +990,7 @@ def parse_args():
             frame_jpgs_capture = arg_int
             i += 1
             continue
-    
+
         # frame_scale = 1
         if (arg == "-scale-factor"):
             i += 1
@@ -974,7 +998,7 @@ def parse_args():
                 print(prog + ": Missing arg needed for -scale-factor")
                 exit(1)
             arg_string = sys.argv[i]
-    
+
             arg_float = float(arg_string)
             if arg_float < 0.25 or arg_float > 1.0:
                 print(prog + ": the -scale-factor must be greater than 0.24 and less than or equal to one.")
@@ -982,7 +1006,7 @@ def parse_args():
             frame_scale = arg_float
             i += 1
             continue
-    
+
         if (arg == "-camera-name"):
             i += 1
             if i >= argc:
@@ -995,7 +1019,7 @@ def parse_args():
             camera_name = arg_string
             i += 1
             continue
-    
+
         if (arg == "-camera-number"):
             i += 1
             if i >= argc:
@@ -1012,7 +1036,7 @@ def parse_args():
             camera_number = arg_int
             i += 1
             continue
-    
+
         if (arg == "-upload-link"):
             i += 1
             if i >= argc:
@@ -1026,19 +1050,19 @@ def parse_args():
             frame_post_process = True
             i += 1
             continue
-    
+
         # frame_gmail_config = False
         if (arg == "-gmail-browser-config"):
             webbrowser.open_new_tab("gmail-config.html")
             i += 1
             continue
-    
+
         if (arg == "-gmail-info"):
             i += 1
             if i >= argc:
                 print(prog + ": Missing arguments needed for -gmail-info")
                 exit(1)
-    
+
             arg_filename = sys.argv[i]
             i += 1
             af = ""
@@ -1052,44 +1076,44 @@ def parse_args():
                     ap = ap + s
                 else:
                     af = af + s
-    
+
             if found == True:
                 arg_filename = af
                 arg_password = ap
-    
+
             try:
                 f = open(arg_filename, "r")
             except IOError:
                 print(prog + ": the -gmail-info file could not be read: \"" + arg_filename + "\"")
                 exit()
-    
+
             lines = f.readlines()
             f.close()
-    
+
             if len(lines) != 3:
                 print(prog + ": the -gmail-info file must contain three lines.")
                 exit(1)
-            
+
             if found == False:
                 arg_password = getpass("Enter the password for " + arg_filename + ": ")
-    
+
             if len(arg_password) <= 7:
                 print(prog + ": the -gmail-info password must at least eight characters long.")
                 exit(1)
-    
+
             gmail_file_check = decode(lines[0].strip(), arg_password)
             if gmail_file_check != "qux":
-                print(prog + ": the -gmail-info password does not match " + 
+                print(prog + ": the -gmail-info password does not match " +
                       arg_filename + ".")
                 exit(1)
-    
+
             gmail_login_name = decode(lines[1].strip(), arg_password)
             print("The gmail login name is " + gmail_login_name + ".")
             gmail_login_password = decode(lines[2].strip(), arg_password)
             if gmail_login_name != "" and gmail_login_password != "" and gmail_recipient != "":
                 frame_post_process = True
             continue
-    
+
         if (arg == "-gmail-recipient"):
             i += 1
             if i >= argc:
@@ -1099,110 +1123,114 @@ def parse_args():
             if len(arg_string) <= 8:
                 print(prog + ": the -gmail-recipient must at least eight characters long.")
                 exit(1)
-                
+
             gmail_recipient = arg_string
             if gmail_login_name != "" and gmail_login_password != "" and gmail_recipient != "":
                 frame_post_process = True
             i += 1
             continue
-    
+        if (arg == "-upload-s3"):
+            s3_upload = True
+            i += 1
+            continue
+
         # fall through as args do not match any of the options
         if (arg != "-h" and arg != "-help" and arg != "?" and arg != "-?"):
             print(prog + ": bad option: " + arg)
-    
-        print(prog + ": options")
-        print()
-        print("    -camera-name " + camera_name)
-        print("        the -camera-name is the name of the directory in which the")
-        print("        images will be stored when they are uploaded.")
-        print()
-        print("    -camera-number " + str(camera_number))
-        print("        the -camera-number is the number of the camera or video")
-        print("        device from which video will be read.  In most cases this")
-        print("        number will be 0 (zero) as it is usually the first camera.")
-        print()
-        print("    -count-between-updates " + str(frame_count_between_updates))
-        print("        set the count between display screen video updates.")
-        print("        this is used to throttle output on slow machines.")
-        print()
-        print("    -idle-count " + str(frame_idle_count))
-        print("        set the idle_count for detecting idle conditions.")
-        print("        this is used to determine the end of a video capture.")
-        print()
-        print("    -jpg-capture-frames " + str(frame_jpgs_capture))
-        print("        often the first frame when motion is detected is blurry.")
-        print("        this sets the capture to be a number of frames after the")
-        print("        motion is detected.")
-        print()
-        print("    -jpg-min-frames " + str(frame_jpgs_min))
-        print("        set the minimum number of frames to be read prior to each jpg ")
-        print("        file being written.  This throttles the number of jpg files.")
-        print("        Depending on the system, there are about 20 frames per second.")
-        print("        Setting this to 1200 would result in one frame per minute.")
-        print()
-        print("    -min-size-areas " + str(frame_min_size_areas))
-        print("        set the minimum area used for motion detection.  differences")
-        print("        less that this size will be ignored.")
-        print()
-        print("    -no-display")
-        print("        do not display the video while this program is running.")
-        print("        this is used to improve performance on slow machines.")
-        print()
-        print("    -one-file")
-        print("        put all of the detected frames in one video file.")
-        print("        video files have the form: " + date_filename("motion", "mp4") + ".")
-        print("        use ffmpeg to convert to other video formats - webm or mov.")
-        print("        ffmpeg -i motion*.mp4 -f webm m.webm")
-        print()
-        print("    -reset-count " + str(frame_reset_count))
-        print("        set the number of repeated rectangles to trigger a frame1 reset.")
-        print("        frame1 has to be reset when stationary objects are added or")
-        print("        move into the field of view and subsequently stop.")
-        print()
-        print("    -scale-factor " + str(frame_scale))
-        print("        this number is multiplied by the hardware default frame size.")
-        print("        this is used to reduce the size of the video and jpg files.")
-        print()
-        print("    -write-addon-count " + str(frame_write_addon_count))
-        print("        set the write count for frames to be added after motion is")
-        print("        detected.  the added frames provide continuity between")
-        print("        detections.")
-        print()
-        print("    -write-jpgs")
-        print("        put the detected \"motion\" frames in jpg files.")
-        print("        jpg files have the form: " + date_filename("motion", "jpg") + ".")
-        print("        set -min-size-areas to 256 to reduce the number of jpg files.")
-        print()
-        print("    -upload-link http://yourserver:8181/upload.php")
-        print("        the -upload-link is the server name and webpage to which the")
-        print("        images will be uploaded.  if you are using a local server")
-        print("        the link might be: http://localhost:8181/upload.php")
-        print("        one can use multiple cameras and upload them to one website.")
-        print()
-        print("    -gmail-browser-config")
-        print("        popup a browser window with two links to gmail.  One link")
-        print("        is for logging into the gmail account.  The other link")
-        print("        is for setting the less secure access used for sending")
-        print("        email.  This access must be enabled to allow email to be")
-        print("        sent from this program")
-        print()
-        print("    -gmail-info gmail.txt")
-        print("        -gmail-info reads the login name and the login password from")
-        print("        the named encrypted file.  The password for the encrypted file is")
-        print("        read from the user (or it can included filename:password).  This")
-        print("        avoids having the gmail password exposed on the command line and")
-        print("        visible with process info.  We want to never have the gmail login")
-        print("        and login password in the clear/open.")
-        print()
-        print("        -gmail-recipient must be set as well as -gmail-info if email")
-        print("        is to be sent.  Run create_gmail_file.py to create an info file.")
-        print()
-        print("    -gmail-recipient some.one@gmail.com")
-        print("        -gmail-recipient sets the recipient address for mail alerts that")
-        print("        are sent when motion is detected.  -gmail-info must be set as")
-        print("        well as -gmail-recipient if email is to be sent.")
-        print()
-    
+
+        # print(prog + ": options")
+        # print()
+        # print("    -camera-name " + camera_name)
+        # print("        the -camera-name is the name of the directory in which the")
+        # print("        images will be stored when they are uploaded.")
+        # print()
+        # print("    -camera-number " + str(camera_number))
+        # print("        the -camera-number is the number of the camera or video")
+        # print("        device from which video will be read.  In most cases this")
+        # print("        number will be 0 (zero) as it is usually the first camera.")
+        # print()
+        # print("    -count-between-updates " + str(frame_count_between_updates))
+        # print("        set the count between display screen video updates.")
+        # print("        this is used to throttle output on slow machines.")
+        # print()
+        # print("    -idle-count " + str(frame_idle_count))
+        # print("        set the idle_count for detecting idle conditions.")
+        # print("        this is used to determine the end of a video capture.")
+        # print()
+        # print("    -jpg-capture-frames " + str(frame_jpgs_capture))
+        # print("        often the first frame when motion is detected is blurry.")
+        # print("        this sets the capture to be a number of frames after the")
+        # print("        motion is detected.")
+        # print()
+        # print("    -jpg-min-frames " + str(frame_jpgs_min))
+        # print("        set the minimum number of frames to be read prior to each jpg ")
+        # print("        file being written.  This throttles the number of jpg files.")
+        # print("        Depending on the system, there are about 20 frames per second.")
+        # print("        Setting this to 1200 would result in one frame per minute.")
+        # print()
+        # print("    -min-size-areas " + str(frame_min_size_areas))
+        # print("        set the minimum area used for motion detection.  differences")
+        # print("        less that this size will be ignored.")
+        # print()
+        # print("    -no-display")
+        # print("        do not display the video while this program is running.")
+        # print("        this is used to improve performance on slow machines.")
+        # print()
+        # print("    -one-file")
+        # print("        put all of the detected frames in one video file.")
+        # print("        video files have the form: " + date_filename("motion", "mp4") + ".")
+        # print("        use ffmpeg to convert to other video formats - webm or mov.")
+        # print("        ffmpeg -i motion*.mp4 -f webm m.webm")
+        # print()
+        # print("    -reset-count " + str(frame_reset_count))
+        # print("        set the number of repeated rectangles to trigger a frame1 reset.")
+        # print("        frame1 has to be reset when stationary objects are added or")
+        # print("        move into the field of view and subsequently stop.")
+        # print()
+        # print("    -scale-factor " + str(frame_scale))
+        # print("        this number is multiplied by the hardware default frame size.")
+        # print("        this is used to reduce the size of the video and jpg files.")
+        # print()
+        # print("    -write-addon-count " + str(frame_write_addon_count))
+        # print("        set the write count for frames to be added after motion is")
+        # print("        detected.  the added frames provide continuity between")
+        # print("        detections.")
+        # print()
+        # print("    -write-jpgs")
+        # print("        put the detected \"motion\" frames in jpg files.")
+        # print("        jpg files have the form: " + date_filename("motion", "jpg") + ".")
+        # print("        set -min-size-areas to 256 to reduce the number of jpg files.")
+        # print()
+        # print("    -upload-link http://yourserver:8181/upload.php")
+        # print("        the -upload-link is the server name and webpage to which the")
+        # print("        images will be uploaded.  if you are using a local server")
+        # print("        the link might be: http://localhost:8181/upload.php")
+        # print("        one can use multiple cameras and upload them to one website.")
+        # print()
+        # print("    -gmail-browser-config")
+        # print("        popup a browser window with two links to gmail.  One link")
+        # print("        is for logging into the gmail account.  The other link")
+        # print("        is for setting the less secure access used for sending")
+        # print("        email.  This access must be enabled to allow email to be")
+        # print("        sent from this program")
+        # print()
+        # print("    -gmail-info gmail.txt")
+        # print("        -gmail-info reads the login name and the login password from")
+        # print("        the named encrypted file.  The password for the encrypted file is")
+        # print("        read from the user (or it can included filename:password).  This")
+        # print("        avoids having the gmail password exposed on the command line and")
+        # print("        visible with process info.  We want to never have the gmail login")
+        # print("        and login password in the clear/open.")
+        # print()
+        # print("        -gmail-recipient must be set as well as -gmail-info if email")
+        # print("        is to be sent.  Run create_gmail_file.py to create an info file.")
+        # print()
+        # print("    -gmail-recipient some.one@gmail.com")
+        # print("        -gmail-recipient sets the recipient address for mail alerts that")
+        # print("        are sent when motion is detected.  -gmail-info must be set as")
+        # print("        well as -gmail-recipient if email is to be sent.")
+        # print()
+
         exit(1)
 
 # end of parse_args()
@@ -1234,7 +1262,6 @@ def recv_args(queue):
     gmail_recipient = queue.get()
     camera_upload_link = queue.get()
     camera_name = queue.get()
-
 
 if __name__=="__main__":
 
